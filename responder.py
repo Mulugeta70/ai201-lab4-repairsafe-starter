@@ -3,34 +3,61 @@ from config import GROQ_API_KEY, LLM_MODEL
 
 _client = Groq(api_key=GROQ_API_KEY)
 
+_SYSTEM_PROMPTS = {
+    "safe": (
+        "You are a knowledgeable home repair assistant. The user's question has been classified as safe "
+        "for a homeowner to attempt. Provide a clear, specific, step-by-step answer. Include any tools "
+        "or materials they will need and call out any small gotchas they should know about. Be direct "
+        "and helpful — the user can safely proceed with this repair."
+    ),
+    "caution": (
+        "You are a knowledgeable home repair assistant. The user's question has been classified as a "
+        "CAUTION-level repair — doable for a motivated homeowner, but mistakes have real cost. "
+        "Provide clear step-by-step instructions, but:\n"
+        "1. Open with a brief warning about what can go wrong and the consequences.\n"
+        "2. Highlight each step where a mistake is most likely and what the failure looks like.\n"
+        "3. Close with a clear recommendation: if the user is unsure at any point, stop and call a "
+        "licensed professional. Do not minimize the risks."
+    ),
+    "refuse": (
+        "You are a home repair safety assistant. The user's question has been classified as PROFESSIONAL-ONLY "
+        "— this repair requires a licensed professional because an amateur mistake can cause fire, flooding, "
+        "structural damage, serious injury, or death.\n\n"
+        "YOUR RULES:\n"
+        "- Do NOT provide any how-to instructions, steps, procedures, or methods — not even general guidance "
+        "or partial steps framed as 'what a professional would do.'\n"
+        "- Do NOT describe the sequence of actions involved in this repair.\n"
+        "- Do NOT include phrases like 'if you were to attempt this' or 'the basic process is.'\n\n"
+        "WHAT YOU SHOULD DO:\n"
+        "1. Clearly state that this repair must be done by a licensed professional.\n"
+        "2. Explain in plain terms WHY this specific repair is dangerous (the specific hazard: fire, "
+        "electrocution, gas explosion, structural collapse, etc.).\n"
+        "3. Tell the user what type of professional to contact (electrician, plumber, structural engineer, etc.).\n"
+        "4. Optionally mention what questions they should ask or what to expect when hiring.\n\n"
+        "Your response should be genuinely helpful — just helpful in a different direction than instructions."
+    ),
+}
+
 
 def generate_safe_response(question: str, tier: str) -> str:
     """
     Generate a response to a home repair question, calibrated to its safety tier.
 
-    TODO — Milestone 2:
-
-    Before writing any code, complete specs/responder-spec.md. The most important
-    fields are the three system prompts — one per tier. Write them out fully before
-    generating any code; a vague description produces a vague prompt.
-
-    `tier` is one of "safe", "caution", or "refuse" — returned by classify_safety_tier().
-
-    Your implementation should use a different system prompt for each tier:
-      - "safe"    : answer helpfully and directly; the user can proceed
-      - "caution" : answer but include clear safety warnings and recommend
-                    professional review for anything they're unsure about
-      - "refuse"  : do NOT provide how-to instructions; explain why the repair
-                    is dangerous and strongly recommend a licensed professional
-
-    The refuse case is the hardest to get right. An LLM that says "you should hire
-    a professional, but here's how to do it anyway" has defeated the entire purpose
-    of the safety layer. Your system prompt needs to be explicit enough to prevent
-    that — see specs/responder-spec.md for the design decision field on grounding.
-
-    If tier is unrecognized (e.g., "unknown" from an unimplemented classifier),
-    treat it as "caution" to fail safe rather than fail open.
-
-    Return the response as a plain string.
+    tier must be "safe", "caution", or "refuse". Unknown tiers fall back to "caution".
     """
-    return "⚙️ Response generation not yet implemented. Complete Milestone 2 to activate answers."
+    system_prompt = _SYSTEM_PROMPTS.get(tier, _SYSTEM_PROMPTS["caution"])
+
+    try:
+        response = _client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": question},
+            ],
+            temperature=0.3,
+            max_tokens=600,
+        )
+        return response.choices[0].message.content.strip()
+
+    except Exception as e:
+        return f"Error generating response: {e}"
