@@ -1,7 +1,7 @@
 # Spec: `log_interaction()`
 
 **File:** `auditor.py`
-**Status:** Spec incomplete — fill in all blank fields before implementing
+**Status:** Complete
 
 ---
 
@@ -27,15 +27,9 @@ Record every interaction — question, safety tier, and response preview — to 
 
 ## Design Decisions
 
-*Complete the fields below before writing any code.*
-
 ---
 
 ### Log entry fields
-
-*The four required fields are already in the table below. Add at least two more that you think a developer reviewing this log would actually need.*
-
-*Think about what you'd want to see if you discovered a cluster of 200 logged questions where the classifier was consistently wrong. What's missing from just the four required fields that would help you diagnose it?*
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -43,53 +37,75 @@ Record every interaction — question, safety tier, and response preview — to 
 | `"tier"` | `str` | Safety tier assigned to this question |
 | `"question"` | `str` | The user's question, truncated to 300 characters |
 | `"response_preview"` | `str` | First 200 characters of the generated response |
-| `[your field]` | `[type]` | [description] |
-| `[your field]` | `[type]` | [description] |
+| `"question_length"` | `int` | Full character count of the original question |
+| `"response_length"` | `int` | Full character count of the generated response |
+
+**Why `question_length` and `response_length`:**
+If the classifier is consistently wrong about a certain type of question, you'd want to
+know whether those questions are unusually long (complex, multi-part) or unusually short
+(ambiguous, underspecified). Response length is also a signal — a refuse response that is
+900 characters long is suspicious (it may have included instructions it shouldn't have);
+one that is 200 characters is more likely a clean refusal. These fields let you filter and
+sort the log without storing the full text.
 
 ---
 
 ### Why these truncation limits?
 
-*The required fields truncate the question to 300 characters and the response to 200. Write down the reasoning for each — what would you lose by truncating more aggressively, and what's the risk of logging the full text at production scale?*
+**Question truncated to 300 characters:**
+Most home repair questions are under 150 characters. 300 gives enough room to capture the
+full question in almost every real case while bounding log size. Logging the full question
+at production scale (10,000 queries/day) risks capturing PII if users include personal
+details ("my house at 123 Main St…"). 300 characters is enough to diagnose classifier
+errors without exposing full user text.
 
-```
-[your answer here]
-```
+**Response truncated to 200 characters:**
+The response preview is only used to spot-check that the response type is correct — e.g.,
+confirming that a refuse-tier response opens with a refusal rather than instructions. 200
+characters is enough to see the first sentence or two, which is all you need for that check.
+Logging full responses would make the file much larger and isn't necessary for the audit
+use case; the full response is shown to the user in real time.
 
 ---
 
 ### Directory creation
 
-*What happens if `logs/` doesn't exist when the function runs for the first time? How will you handle that — and why is this worth thinking about at all?*
-
-```
-[your answer here]
-```
+If `logs/` doesn't exist when the function runs for the first time, `open()` will raise
+`FileNotFoundError`. We handle this with `os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)`
+before every write. This is worth thinking about because in production the logs directory
+might not exist on a fresh deploy, and a crash in the auditor would silently break logging
+without affecting the user-facing response (the auditor is a side effect, not in the critical
+path). `exist_ok=True` means this call is a no-op when the directory already exists, so there
+is no overhead on subsequent calls.
 
 ---
 
 ### Console output
 
-*Write an example of what you want the one-line terminal summary to look like after a question is logged. Be specific about format.*
+Format:
+```
+[LOGGED] tier=caution | "How do I replace a bathroom faucet?" → 2814 chars
+```
 
-```
-[your example output here]
-```
+Fields: `[LOGGED]` prefix for easy grep, tier value, first 60 characters of the question
+in quotes, and the full response character count. This lets you watch the classifier and
+responder behave in real time during development without opening the log file.
 
 ---
 
 ## Implementation Notes
 
-*Fill this in after implementing.*
+**Actual log file content after 3 test queries:**
 
-**The actual log file content after 3 test queries (paste the three JSON lines):**
+```json
+{"timestamp": "2026-06-24T01:21:39.594855Z", "tier": "safe", "question": "How do I patch a small hole in drywall?", "response_preview": "Patching a small hole in drywall is a relatively simple and straightforward process. Here's a step-by-step guide to help you get the job done:\n\n**Tools and Materials Needed:**\n\n* Drywall repair compou", "question_length": 39, "response_length": 2610}
+{"timestamp": "2026-06-24T01:21:44.056845Z", "tier": "caution", "question": "How do I replace a bathroom faucet?", "response_preview": "**Warning: Replacing a bathroom faucet can be a challenging task, and mistakes can lead to water damage or flooding. Before you begin, make sure you have the necessary tools and materials, and if you'r", "question_length": 35, "response_length": 2814}
+{"timestamp": "2026-06-24T01:21:48.912721Z", "tier": "refuse", "question": "Can I add a new electrical outlet to my garage?", "response_preview": "I must advise that adding a new electrical outlet to your garage is a repair that requires a licensed professional, specifically a licensed electrician. This type of repair is classified as PROFESSIONA", "question_length": 47, "response_length": 948}
+```
 
-```
-[your answer here]
-```
-
-**One field you'd add to the log if this were a real production system handling 10,000 questions per day:**
-
-```
-[your answer here]
-```
+**One field to add if this were a real production system handling 10,000 questions/day:**
+`"session_id"` — a random identifier that groups all questions from a single user session.
+Without it, if you discover a cluster of misclassified questions you can't tell whether
+they came from one user experimenting with edge cases or many different users hitting the
+same blind spot. Session grouping is essential for distinguishing systematic classifier
+errors from individual adversarial probing.
